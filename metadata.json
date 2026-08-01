@@ -1,0 +1,6 @@
+{
+  "name": "ترجمان التحاليل الطبية",
+  "description": "اقرأ نتائج التحاليل الطبية بسهولة.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
