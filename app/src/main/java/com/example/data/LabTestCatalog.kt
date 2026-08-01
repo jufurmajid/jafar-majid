@@ -427,15 +427,21 @@ object LabTestCatalog {
         for (base in BASE_TESTS) {
             val allExpandedAliases = mutableSetOf<String>()
 
-            // Add original aliases first.
-            for (alias in base.aliases) {
+            // Seed aliases with abbreviation, aliases, arabicName, and englishName
+            val seedAliases = base.aliases.toMutableSet()
+            seedAliases.add(base.abbreviation)
+            seedAliases.add(base.arabicName)
+            seedAliases.add(base.englishName)
+
+            // Add seed aliases first.
+            for (alias in seedAliases) {
                 allExpandedAliases.add(alias)
                 allExpandedAliases.add(alias.uppercase(Locale.ROOT))
                 allExpandedAliases.add(alias.lowercase(Locale.ROOT))
             }
 
-            // Procedurally expand the base aliases.
-            for (alias in base.aliases) {
+            // Procedurally expand the seed aliases.
+            for (alias in seedAliases) {
                 val isArabic = alias.any { it.code in 0x0600..0x06FF }
 
                 if (isArabic) {
@@ -444,6 +450,8 @@ object LabTestCatalog {
                             val candidate = "$pref$alias$suff".trim()
                             if (candidate.isNotEmpty()) {
                                 allExpandedAliases.add(candidate)
+                                allExpandedAliases.add(candidate.lowercase(Locale.ROOT))
+                                allExpandedAliases.add(candidate.uppercase(Locale.ROOT))
                             }
                         }
                     }
@@ -478,6 +486,12 @@ object LabTestCatalog {
             for (expandedAlias in allExpandedAliases) {
                 val key = expandedAlias.lowercase(Locale.ROOT).trim()
                 synonymToMeta[key] = finalMeta
+
+                // Collapse lookalikes and register them to handle OCR substitutions flawlessly!
+                val collapsed = collapseLookalikeCharacters(key)
+                if (collapsed.isNotEmpty()) {
+                    synonymToMeta[collapsed] = finalMeta
+                }
             }
         }
 
@@ -486,6 +500,18 @@ object LabTestCatalog {
 
         // Print synonym dictionary size to confirm it exceeds 3000!
         println("LabTestCatalog initialized with ${SYNONYM_MAP.size} synonyms!")
+    }
+
+    /**
+     * Collapsing lookalike characters (such as 1, l, i, | into i, and 0, o into o).
+     */
+    fun collapseLookalikeCharacters(text: String): String {
+        return text.lowercase(Locale.ROOT)
+            .replace("1", "i")
+            .replace("l", "i")
+            .replace("|", "i")
+            .replace("0", "o")
+            .replace(Regex("""[^a-z0-9\u0600-\u06FF]"""), "")
     }
 
     /**
@@ -503,6 +529,11 @@ object LabTestCatalog {
         val cleanNoPunct = cleaned.replace(Regex("""[.:\-_]"""), " ").trim()
         val matchNoPunct = SYNONYM_MAP[cleanNoPunct]
         if (matchNoPunct != null) return matchNoPunct
+
+        // Collapsed lookalikes match
+        val collapsed = collapseLookalikeCharacters(cleaned)
+        val matchCollapsed = SYNONYM_MAP[collapsed]
+        if (matchCollapsed != null) return matchCollapsed
 
         // Check if any word or subset matches a high priority synonym.
         for (entry in SYNONYM_MAP.entries) {

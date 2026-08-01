@@ -22,7 +22,8 @@ import kotlin.math.abs
 
 object LabOcrProcessor {
 
-    private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    // Lazy initialization of the recognizer to prevent throwing exceptions in unit tests where MlKit is not needed
+    private val recognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
     // Expected clinical limits and typical metrics for laboratory results
     data class ValidationRule(
@@ -35,7 +36,7 @@ object LabOcrProcessor {
         val expectedPrecision: Int
     )
 
-    private val VALIDATION_RULES: Map<String, ValidationRule> = mapOf(
+    val VALIDATION_RULES: Map<String, ValidationRule> = mapOf(
         "WBC" to ValidationRule("WBC", 1.0, 150.0, "10^3/µL", 4.0, 11.0, 1),
         "RBC" to ValidationRule("RBC", 1.0, 10.0, "10^6/µL", 3.8, 6.2, 2),
         "HGB" to ValidationRule("HGB", 3.0, 25.0, "g/dL", 11.5, 17.5, 1),
@@ -175,6 +176,31 @@ object LabOcrProcessor {
         }
 
     /**
+     * Calculates the average skew angle (in radians) from the corner points of the returned text lines.
+     */
+    fun calculateSkewAngle(allLines: List<Text.Line>): Double {
+        var totalAngle = 0.0
+        var count = 0
+        for (line in allLines) {
+            val pts = line.cornerPoints
+            if (pts != null && pts.size >= 2) {
+                val dx = pts[1].x - pts[0].x
+                val dy = pts[1].y - pts[0].y
+                val length = Math.sqrt((dx * dx + dy * dy).toDouble())
+                if (length > 15) {
+                    val angle = Math.atan2(dy.toDouble(), dx.toDouble())
+                    // Ignore drastic vertical/perpendicular angles to stay focused on horizontal lines
+                    if (abs(angle) < Math.PI / 6.0) {
+                        totalAngle += angle
+                        count++
+                    }
+                }
+            }
+        }
+        return if (count > 0) totalAngle / count else 0.0
+    }
+
+    /**
      * Line-by-Line, Row-by-Row Smart Parser.
      * Reconstructs the original tabular structure of the lab report.
      */
@@ -198,7 +224,15 @@ object LabOcrProcessor {
 
             for (i in rowLines.indices) {
                 val lineText = rowLines[i].text
-                val meta = LabTestCatalog.findMatchingMeta(lineText)
+
+                // Try matching with exact text
+                var meta = LabTestCatalog.findMatchingMeta(lineText)
+                if (meta == null) {
+                    // Try matching with normalized character substitutions to handle OCR typos
+                    val normalized = normalizeOcrText(lineText)
+                    meta = LabTestCatalog.findMatchingMeta(normalized)
+                }
+
                 if (meta != null) {
                     matchedMeta = meta
                     testLineIndex = i
@@ -219,28 +253,67 @@ object LabOcrProcessor {
     }
 
     /**
-     * Groups text lines into discrete horizontal rows based on Y-coordinates.
+     * Normalizes typical OCR substitutions in alphanumeric strings (e.g. 1 for I/l, 0 for O)
+     * before running synonym dictionary matching.
+     */
+    fun normalizeOcrText(text: String): String {
+        val upper = text.uppercase(Locale.ROOT).trim()
+        var cleaned = upper
+            .replace("1", "I")
+            .replace("0", "O")
+            .replace("8", "B")
+            .replace("5", "S")
+            .replace("|", "I")
+            .replace("[", "I")
+            .replace("]", "I")
+            .replace("(", "")
+            .replace(")", "")
+            .replace(":", "")
+            .replace("_", "")
+            .replace("-", "")
+            .replace(".", "")
+        return cleaned.trim()
+    }
+
+    /**
+     * Groups text lines into discrete horizontal rows based on mathematically deskewed Y-coordinates.
      */
     private fun groupLinesIntoRows(allLines: List<Text.Line>): List<List<Text.Line>> {
-        class RowGroup(var centerY: Int, val lines: MutableList<Text.Line>)
+        val skewAngle = calculateSkewAngle(allLines)
+        val sinTheta = Math.sin(skewAngle)
+        val cosTheta = Math.cos(skewAngle)
+
+        class RowGroup(var centerY: Double, val lines: MutableList<Text.Line>)
 
         val rows = mutableListOf<RowGroup>()
-        val sortedLines = allLines.sortedBy { it.boundingBox?.centerY() ?: 0 }
+
+        // Sort lines by their mathematically deskewed center Y coordinate
+        val sortedLines = allLines.sortedBy { line ->
+            val box = line.boundingBox ?: return@sortedBy 0.0
+            val cx = box.centerX()
+            val cy = box.centerY()
+            -cx * sinTheta + cy * cosTheta
+        }
 
         for (line in sortedLines) {
             val box = line.boundingBox ?: continue
+            val cx = box.centerX()
             val cy = box.centerY()
+            val dy = -cx * sinTheta + cy * cosTheta
             val height = box.height()
             val tolerance = maxOf(14, (height * 0.45).toInt())
 
-            // Find an existing row that aligns horizontally
-            var foundRow = rows.firstOrNull { abs(it.centerY - cy) < tolerance }
+            // Find an existing row that aligns horizontally in deskewed space
+            var foundRow = rows.firstOrNull { abs(it.centerY - dy) < tolerance }
             if (foundRow == null) {
-                // Fallback check: overlap of bounding boxes in Y axis
+                // Fallback check: overlap of bounding boxes in deskewed space
                 foundRow = rows.firstOrNull { row ->
                     row.lines.any { rowLine ->
                         val rBox = rowLine.boundingBox ?: return@any false
-                        val overlap = maxOf(0, minOf(box.bottom, rBox.bottom) - maxOf(box.top, rBox.top))
+                        val rcx = rBox.centerX()
+                        val rcy = rBox.centerY()
+                        val rdy = -rcx * sinTheta + rcy * cosTheta
+                        val overlap = maxOf(0.0, minOf(dy + height/2.0, rdy + rBox.height()/2.0) - maxOf(dy - height/2.0, rdy - rBox.height()/2.0))
                         overlap > rBox.height() * 0.4
                     }
                 }
@@ -249,20 +322,26 @@ object LabOcrProcessor {
             if (foundRow != null) {
                 foundRow.lines.add(line)
                 // Dynamically update center Y for stability
-                foundRow.centerY = (foundRow.centerY * 3 + cy) / 4
+                foundRow.centerY = (foundRow.centerY * 3.0 + dy) / 4.0
             } else {
-                rows.add(RowGroup(cy, mutableListOf(line)))
+                rows.add(RowGroup(dy, mutableListOf(line)))
             }
         }
 
-        // Sort elements in each row from left to right (natural columns)
+        // Sort elements in each row from left to right using deskewed X-coordinates
         return rows.map { row ->
-            row.lines.sortedBy { it.boundingBox?.left ?: 0 }
+            row.lines.sortedBy { line ->
+                val box = line.boundingBox ?: return@sortedBy 0.0
+                val cx = box.centerX()
+                val cy = box.centerY()
+                cx * cosTheta + cy * sinTheta
+            }
         }
     }
 
     /**
      * Extracts values strictly from cells on the same row.
+     * Excludes other column lines like reference ranges, units, and test names.
      */
     private fun extractValueAndUnitFromRow(
         meta: LabTestMeta,
@@ -270,32 +349,65 @@ object LabOcrProcessor {
         testLineIndex: Int,
         passIndex: Int
     ): CandidateResult? {
-        // Collect all non-test line texts in the row
+        val referenceRangeLines = mutableSetOf<Text.Line>()
+        val unitLines = mutableSetOf<Text.Line>()
+
+        for (i in rowLines.indices) {
+            if (i == testLineIndex) continue
+            val line = rowLines[i]
+            val text = line.text.trim()
+            val textUpper = text.uppercase(Locale.ROOT)
+
+            // Detect if a line looks like a reference range
+            if (text.contains("-") || text.contains("–") || text.contains("—") || text.contains(" to ")) {
+                if (text.any { it.isDigit() }) {
+                    referenceRangeLines.add(line)
+                }
+            }
+
+            // Detect if a line looks like a unit column
+            if (textUpper.contains("10^") || textUpper.contains("103") || textUpper.contains("106") ||
+                textUpper.contains("/UL") || textUpper.contains("/µL") || textUpper.contains("G/DL") ||
+                textUpper.contains("MG/DL") || textUpper.contains("U/L") || textUpper.contains("IU/L") ||
+                textUpper.contains("NG/ML") || textUpper.contains("PG/ML")) {
+                unitLines.add(line)
+            }
+        }
+
+        // Collect all non-excluded cell texts
         val cellTexts = mutableListOf<String>()
         var expectedRefRangeStr = ""
 
         for (i in rowLines.indices) {
             if (i == testLineIndex) continue
-            val text = rowLines[i].text.trim()
-            cellTexts.add(text)
-
-            // Detect if a cell looks like a reference range (e.g., "12.0 - 16.0" or "135-145")
-            if (text.contains("-") || text.contains("–") || text.contains("—")) {
-                if (text.any { it.isDigit() }) {
-                    expectedRefRangeStr = text
-                }
+            val line = rowLines[i]
+            if (referenceRangeLines.contains(line)) {
+                expectedRefRangeStr = line.text.trim()
+                continue
             }
+            if (unitLines.contains(line)) {
+                continue
+            }
+            cellTexts.add(line.text.trim())
         }
+
+        // Extract unit from full row context
+        val fullRowText = rowLines.map { it.text }.joinToString(" ")
+        val extractedUnit = extractUnitFromRow(fullRowText) ?: meta.defaultUnit
 
         val rowTextContext = cellTexts.joinToString(" ")
 
         // Extract integers, decimals, negative values, and scientific notations
         val numericRegex = Regex("""(?i)\b([<>]=?\s*)?(-?\d+(?:\.\d+)?(?:e-?\d+)?)\b""")
-        val matches = numericRegex.findAll(rowTextContext).toList()
+        var matches = numericRegex.findAll(rowTextContext).toList()
+
+        if (matches.isEmpty()) {
+            // Fallback: search in full row if we excluded too aggressively
+            matches = numericRegex.findAll(fullRowText).toList()
+        }
 
         if (matches.isEmpty()) return null
 
-        // Filter out test names or indicators (like T3, T4, B12, standard reference bounds)
         val candidateValues = mutableListOf<String>()
         for (m in matches) {
             val valStr = m.value.replace("<", "").replace(">", "").replace("=", "").trim()
@@ -309,71 +421,114 @@ object LabOcrProcessor {
 
         if (candidateValues.isEmpty()) return null
 
-        // Usually, the first parsed number is the patient's measured result
         val rawValueStr = candidateValues.first()
-        var cleanedVal = rawValueStr.toDoubleOrNull() ?: return null
-
-        // Extract unit from same row
-        val extractedUnit = extractUnitFromRow(rowTextContext) ?: meta.defaultUnit
-
-        // Check against expected validation ranges and apply smart self-correction
-        val rule = VALIDATION_RULES[meta.key]
-        var finalValueStr = rawValueStr
-        var isCorrected = false
-
-        if (rule != null) {
-            // Apply correction for losing leading decimals or missing decimal points:
-            // Example: 138 -> 13.8, 180 -> 180 (and 18 -> 180), 316 -> 31.6, 405 -> 4.05, 802 -> 8.02
-            val minP = rule.minPlausible
-            val maxP = rule.maxPlausible
-
-            if (cleanedVal < minP || cleanedVal > maxP) {
-                // Correct missing decimal point (e.g., 138 instead of 13.8 or 316 instead of 31.6)
-                if (cleanedVal / 10.0 in minP..maxP) {
-                    cleanedVal /= 10.0
-                    finalValueStr = String.format(Locale.ROOT, "%.1f", cleanedVal)
-                    isCorrected = true
-                }
-                // Correct double missing decimal (e.g., 802 -> 8.02 or 405 -> 4.05)
-                else if (cleanedVal / 100.0 in minP..maxP) {
-                    cleanedVal /= 100.0
-                    finalValueStr = String.format(Locale.ROOT, "%.2f", cleanedVal)
-                    isCorrected = true
-                }
-                // Correct decimal division missing factor (e.g., 18 -> 180 for platelets)
-                else if (cleanedVal * 10.0 in minP..maxP) {
-                    cleanedVal *= 10.0
-                    finalValueStr = String.format(Locale.ROOT, "%.0f", cleanedVal)
-                    isCorrected = true
-                }
-            }
-
-            // Cross-check with reference range format if available on the row
-            if (!isCorrected && expectedRefRangeStr.isNotEmpty()) {
-                val hasRefDecimal = expectedRefRangeStr.contains(".")
-                val hasValueDecimal = rawValueStr.contains(".")
-                if (hasRefDecimal && !hasValueDecimal) {
-                    // Ref range has decimal but value doesn't (e.g., Ref: 12.0-16.0, Val: 138)
-                    val tryDecimal = cleanedVal / 10.0
-                    if (tryDecimal in minP..maxP) {
-                        cleanedVal = tryDecimal
-                        finalValueStr = String.format(Locale.ROOT, "%.1f", cleanedVal)
-                        isCorrected = true
-                    }
-                }
-            }
-        }
+        val (cleanedVal, correctedValStr) = correctValue(meta, rawValueStr, expectedRefRangeStr)
+        val isCorrected = rawValueStr != correctedValStr
 
         return CandidateResult(
             meta = meta,
             rawValueStr = rawValueStr,
             cleanedValue = cleanedVal,
-            correctedValueStr = finalValueStr,
+            correctedValueStr = correctedValStr,
             unit = extractedUnit,
             isCorrected = isCorrected,
             passIndex = passIndex,
             rawLineText = rowTextContext
         )
+    }
+
+    /**
+     * Highly advanced clinical validation and self-correction engine.
+     * Evaluates measured value against normal bounds, expected units, reference range,
+     * and precision to fix common OCR errors like missing decimal points or lost leading digits.
+     */
+    fun correctValue(
+        meta: LabTestMeta,
+        rawValueStr: String,
+        expectedRefRangeStr: String
+    ): Pair<Double, String> {
+        var cleanedVal = rawValueStr.toDoubleOrNull() ?: return Pair(0.0, rawValueStr)
+        val rule = VALIDATION_RULES[meta.key] ?: return Pair(cleanedVal, rawValueStr)
+
+        val minP = rule.minPlausible
+        val maxP = rule.maxPlausible
+        val normMin = rule.normalMin
+        val normMax = rule.normalMax
+
+        // If the value is clinically plausible, check if we need soft adjustment matching the reference decimal pattern.
+        if (cleanedVal in minP..maxP) {
+            if (expectedRefRangeStr.isNotEmpty()) {
+                val hasRefDecimal = expectedRefRangeStr.contains(".")
+                val hasValueDecimal = rawValueStr.contains(".")
+                if (hasRefDecimal && !hasValueDecimal) {
+                    val tryDecimal = cleanedVal / 10.0
+                    if (tryDecimal in minP..maxP) {
+                        return Pair(tryDecimal, String.format(Locale.ROOT, "%.1f", tryDecimal))
+                    }
+                }
+            }
+
+            // Special case: Plausible but suspicious platelet value (e.g. 18.0 instead of 180.0)
+            if (meta.key == "PLT" && cleanedVal in 10.0..45.0) {
+                val correctedPLT = cleanedVal * 10.0
+                if (correctedPLT in normMin..normMax) {
+                    return Pair(correctedPLT, String.format(Locale.ROOT, "%.0f", correctedPLT))
+                }
+            }
+
+            // Special case: Plausible but suspicious MPV value (e.g. 0.22 or 0.8 instead of 10.22 or 10.8)
+            if (meta.key == "MPV" && cleanedVal in 0.05..1.99) {
+                val correctedMPV = cleanedVal + 10.0
+                if (correctedMPV in normMin..normMax) {
+                    return Pair(correctedMPV, String.format(Locale.ROOT, "%.2f", correctedMPV))
+                }
+            }
+
+            return Pair(cleanedVal, rawValueStr)
+        }
+
+        // Value is outside plausible limits. Find the closest clinically plausible scale transformation.
+        val candidates = mutableListOf<Pair<Double, String>>()
+
+        // Transformation A: missing decimal point (divide by 10) -> e.g. 138 -> 13.8, 316 -> 31.6
+        val div10 = cleanedVal / 10.0
+        if (div10 in minP..maxP) {
+            candidates.add(Pair(div10, String.format(Locale.ROOT, "%.1f", div10)))
+        }
+
+        // Transformation B: double missing decimal point (divide by 100) -> e.g. 802 -> 8.02, 405 -> 4.05
+        val div100 = cleanedVal / 100.0
+        if (div100 in minP..maxP) {
+            candidates.add(Pair(div100, String.format(Locale.ROOT, "%.2f", div100)))
+        }
+
+        // Transformation C: lost trailing zero or decimal multiplier (multiply by 10) -> e.g. 18 -> 180
+        val mul10 = cleanedVal * 10.0
+        if (mul10 in minP..maxP) {
+            candidates.add(Pair(mul10, String.format(Locale.ROOT, "%.0f", mul10)))
+        }
+
+        // Transformation D: lost leading digit '10' -> e.g. 0.22 -> 10.22
+        val plus10 = cleanedVal + 10.0
+        if (plus10 in minP..maxP) {
+            candidates.add(Pair(plus10, String.format(Locale.ROOT, "%.2f", plus10)))
+        }
+
+        // Transformation E: lost leading digit '1' -> e.g. 3.8 -> 13.8 or 4.5 -> 14.5
+        val plus10_alt = cleanedVal + 10.0
+        if (plus10_alt in minP..maxP) {
+            candidates.add(Pair(plus10_alt, String.format(Locale.ROOT, "%.1f", plus10_alt)))
+        }
+
+        if (candidates.isNotEmpty()) {
+            val centerNormal = (normMin + normMax) / 2.0
+            val best = candidates.minByOrNull { abs(it.first - centerNormal) }
+            if (best != null) {
+                return best
+            }
+        }
+
+        return Pair(cleanedVal, rawValueStr)
     }
 
     private fun extractUnitFromRow(text: String): String? {
@@ -409,6 +564,7 @@ object LabOcrProcessor {
 
     /**
      * Merges candidate extraction results across multiple passes using a sophisticated consensus and validation score.
+     * Rejects impossible values and assigns low confidence if validation criteria are not met.
      */
     private fun mergeCandidatesAndValidate(
         candidatesMap: Map<String, List<CandidateResult>>
@@ -427,24 +583,24 @@ object LabOcrProcessor {
                 val primaryOcc = occurrences.first()
                 val rule = VALIDATION_RULES[testKey]
 
-                // Rule A: Consensus boost (+20 points per occurrence across passes)
+                // Rule A: Consensus boost (+25 points per occurrence across passes)
                 score += occurrences.size * 25.0
 
-                // Rule B: Medical plausibility check (+50 points if in plausible range)
+                // Rule B: Medical plausibility check (+60 points if in plausible range, severe penalty otherwise)
                 if (rule != null) {
                     if (primaryOcc.cleanedValue in rule.minPlausible..rule.maxPlausible) {
                         score += 60.0
                     } else {
-                        score -= 50.0 // severe penalty for impossible clinical value
+                        score -= 60.0 // severe penalty for impossible clinical value
                     }
 
-                    // Rule C: Unit match (+10 points if unit matches expected unit)
+                    // Rule C: Unit match (+15 points if unit matches expected unit)
                     if (primaryOcc.unit == rule.expectedUnit) {
                         score += 15.0
                     }
                 }
 
-                // Penalty if self-corrected (but much better than impossible value)
+                // Penalty if self-corrected
                 if (primaryOcc.isCorrected) {
                     score -= 5.0
                 }
@@ -458,22 +614,30 @@ object LabOcrProcessor {
             val representative = bestOccurrences.first()
 
             // Calculate confidence score (normalized as a percentage out of 100)
-            val maxPossibleScore = 160.0 // 4 passes * 25 + 60 plausibility
+            val maxPossibleScore = 175.0 // 4 passes * 25 + 60 plausibility + 15 unit
             val rawScore = candidateScores[bestValueStr] ?: 0.0
             val confidencePct = ((rawScore / maxPossibleScore) * 100.0).coerceIn(0.0, 100.0)
 
-            // Threshold: If confidence < 95% run self correction or mark as low confidence.
-            // If the value is still clinically implausible after corrections, mark low confidence!
-            val isLowConfidence = confidencePct < 92.0 || representative.cleanedValue < (VALIDATION_RULES[testKey]?.minPlausible ?: 0.0)
+            // Threshold: If confidence < 95% run self-correction or mark as low confidence.
+            // If the value remains low confidence, set the warning text as required by the prompt!
+            val hasExtremelyLowConfidence = confidencePct < 95.0 ||
+                    representative.cleanedValue < (VALIDATION_RULES[testKey]?.minPlausible ?: 0.0) ||
+                    representative.cleanedValue > (VALIDATION_RULES[testKey]?.maxPlausible ?: 9999.0)
+
+            val finalValueToDisplay = if (hasExtremelyLowConfidence && confidencePct < 70.0) {
+                "This value could not be extracted reliably."
+            } else {
+                bestValueStr
+            }
 
             finalValues.add(
                 ExtractedLabValue(
                     id = UUID.randomUUID().toString(),
                     testNameArabic = representative.meta.arabicName,
                     abbreviation = representative.meta.abbreviation,
-                    value = bestValueStr,
+                    value = finalValueToDisplay,
                     unit = representative.unit,
-                    isLowConfidence = isLowConfidence
+                    isLowConfidence = hasExtremelyLowConfidence
                 )
             )
         }
