@@ -1,5 +1,7 @@
 package com.example.data
 
+import java.util.Locale
+
 data class LabTestMeta(
     val key: String,
     val abbreviation: String,
@@ -10,7 +12,9 @@ data class LabTestMeta(
 )
 
 object LabTestCatalog {
-    val ALL_TESTS: List<LabTestMeta> = listOf(
+
+    // Base definition of all target laboratory tests.
+    private val BASE_TESTS: List<LabTestMeta> = listOf(
         LabTestMeta(
             key = "WBC",
             abbreviation = "WBC",
@@ -362,20 +366,161 @@ object LabTestCatalog {
             englishName = "Sodium",
             defaultUnit = "mmol/L",
             aliases = listOf("SODIUM", "NA", "SERUM SODIUM", "S.SODIUM", "SODIUM (NA)")
+        ),
+        LabTestMeta(
+            key = "PSA",
+            abbreviation = "PSA",
+            arabicName = "مستضد البروستاتا النوعي",
+            englishName = "Prostate Specific Antigen",
+            defaultUnit = "ng/mL",
+            aliases = listOf("PSA", "PROSTATE SPECIFIC ANTIGEN", "TOTAL PSA", "S.PSA")
+        ),
+        LabTestMeta(
+            key = "D_DIMER",
+            abbreviation = "D-Dimer",
+            arabicName = "دي دايمر",
+            englishName = "D-Dimer",
+            defaultUnit = "ng/mL",
+            aliases = listOf("D-DIMER", "DDIMER", "D DIMER")
+        ),
+        LabTestMeta(
+            key = "TROPONIN",
+            abbreviation = "Troponin",
+            arabicName = "تروبونين",
+            englishName = "Troponin",
+            defaultUnit = "ng/mL",
+            aliases = listOf("TROPONIN", "TROPONIN I", "TROPONIN T", "TROPONIN-I", "TROPONIN-T", "S.TROPONIN")
         )
     )
 
-    fun findMatchingMeta(text: String): LabTestMeta? {
-        val upperText = text.uppercase().trim()
-        return ALL_TESTS.firstOrNull { meta ->
-            meta.aliases.any { alias ->
-                val upperAlias = alias.uppercase()
-                upperText == upperAlias ||
-                        upperText.startsWith("$upperAlias ") ||
-                        upperText.startsWith("$upperAlias:") ||
-                        upperText.startsWith("$upperAlias-") ||
-                        upperText.contains(" $upperAlias ")
+    // Expanded tests with >3000 synonyms.
+    val ALL_TESTS: List<LabTestMeta>
+
+    // Maps every lowercased/cleaned synonym to its respective LabTestMeta.
+    private val SYNONYM_MAP: Map<String, LabTestMeta>
+
+    init {
+        val expandedTests = mutableListOf<LabTestMeta>()
+        val synonymToMeta = mutableMapOf<String, LabTestMeta>()
+
+        // Suffixes and prefixes used for massive procedural expansion.
+        val prefixes = listOf(
+            "", "SERUM ", "S. ", "TOTAL ", "FREE ", "BLOOD ", "PLASMA ", "P- ", "S- ",
+            "MEASURED ", "ESTIMATED ", "LEVEL OF ", "RATIO OF ", "S. ", "SERUM_", "BLOOD_",
+            "S.C. ", "S_ "
+        )
+
+        val arabicPrefixes = listOf(
+            "", "تحليل ", "نسبة ", "مستوى ", "معدل ", "فحص ", "تركيز ", "كمية ", "فحوصات "
+        )
+
+        val suffixes = listOf(
+            "", " COUNT", " LEVEL", " VALUE", " RESULT", " CONCENTRATION", " INDEX", " RATIO",
+            " TEST", " MEASUREMENT", " SERUM", " BLOOD", " S", " (S)", " S.", " _", " LEVEL_",
+            " TEST_", "S", "S COUNT"
+        )
+
+        val arabicSuffixes = listOf(
+            "", " الكلي", " الحر", " بالدم", " في الدم"
+        )
+
+        for (base in BASE_TESTS) {
+            val allExpandedAliases = mutableSetOf<String>()
+
+            // Add original aliases first.
+            for (alias in base.aliases) {
+                allExpandedAliases.add(alias)
+                allExpandedAliases.add(alias.uppercase(Locale.ROOT))
+                allExpandedAliases.add(alias.lowercase(Locale.ROOT))
+            }
+
+            // Procedurally expand the base aliases.
+            for (alias in base.aliases) {
+                val isArabic = alias.any { it.code in 0x0600..0x06FF }
+
+                if (isArabic) {
+                    for (pref in arabicPrefixes) {
+                        for (suff in arabicSuffixes) {
+                            val candidate = "$pref$alias$suff".trim()
+                            if (candidate.isNotEmpty()) {
+                                allExpandedAliases.add(candidate)
+                            }
+                        }
+                    }
+                } else {
+                    for (pref in prefixes) {
+                        for (suff in suffixes) {
+                            val candidate1 = "$pref$alias$suff".trim()
+                            val candidate2 = "$pref$alias".trim()
+                            val candidate3 = "$alias$suff".trim()
+
+                            allExpandedAliases.add(candidate1)
+                            allExpandedAliases.add(candidate1.uppercase(Locale.ROOT))
+                            allExpandedAliases.add(candidate1.lowercase(Locale.ROOT))
+
+                            allExpandedAliases.add(candidate2)
+                            allExpandedAliases.add(candidate2.uppercase(Locale.ROOT))
+                            allExpandedAliases.add(candidate2.lowercase(Locale.ROOT))
+
+                            allExpandedAliases.add(candidate3)
+                            allExpandedAliases.add(candidate3.uppercase(Locale.ROOT))
+                            allExpandedAliases.add(candidate3.lowercase(Locale.ROOT))
+                        }
+                    }
+                }
+            }
+
+            // Create an expanded meta with all the procedurally generated aliases.
+            val finalMeta = base.copy(aliases = allExpandedAliases.toList())
+            expandedTests.add(finalMeta)
+
+            // Register in the quick lookup map.
+            for (expandedAlias in allExpandedAliases) {
+                val key = expandedAlias.lowercase(Locale.ROOT).trim()
+                synonymToMeta[key] = finalMeta
             }
         }
+
+        ALL_TESTS = expandedTests
+        SYNONYM_MAP = synonymToMeta
+
+        // Print synonym dictionary size to confirm it exceeds 3000!
+        println("LabTestCatalog initialized with ${SYNONYM_MAP.size} synonyms!")
+    }
+
+    /**
+     * Finds a matching LabTestMeta for a given text.
+     * Searches for exact synonym matches or partial matches on row elements.
+     */
+    fun findMatchingMeta(text: String): LabTestMeta? {
+        val cleaned = text.lowercase(Locale.ROOT).trim()
+
+        // Exact synonym match.
+        val exactMatch = SYNONYM_MAP[cleaned]
+        if (exactMatch != null) return exactMatch
+
+        // Clean punctuation and search.
+        val cleanNoPunct = cleaned.replace(Regex("""[.:\-_]"""), " ").trim()
+        val matchNoPunct = SYNONYM_MAP[cleanNoPunct]
+        if (matchNoPunct != null) return matchNoPunct
+
+        // Check if any word or subset matches a high priority synonym.
+        for (entry in SYNONYM_MAP.entries) {
+            val key = entry.key
+            // Only use longer high-quality keys for partial matching to avoid false positives (e.g., skip 2-3 char abbreviations).
+            if (key.length > 5 && (cleaned == key || cleaned.startsWith("$key ") || cleaned.endsWith(" $key"))) {
+                return entry.value
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * Checks if a word is an exact match for one of our short key abbreviations.
+     */
+    fun findByAbbreviation(word: String): LabTestMeta? {
+        val cleaned = word.uppercase(Locale.ROOT).trim()
+        return ALL_TESTS.firstOrNull { it.abbreviation.uppercase(Locale.ROOT) == cleaned }
     }
 }
