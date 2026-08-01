@@ -10,13 +10,21 @@ import kotlin.math.max
 object ImagePreprocessor {
 
     /**
-     * Loads, rotates, and trims the raw image.
+     * Loads, rotates, trims base borders, auto-crops, and removes shadows/gradients from the raw image.
      */
     fun loadBaseBitmap(context: Context, imageUri: Uri): Bitmap? {
         return try {
             val rawBitmap = loadBitmapFromUri(context, imageUri) ?: return null
             val rotatedBitmap = rotateImageIfRequired(context, imageUri, rawBitmap)
-            trimOuterBorders(rotatedBitmap)
+            val trimmed = trimOuterBorders(rotatedBitmap)
+            val cropped = autoCropAndCorrectPerspective(trimmed)
+
+            // Apply advanced illumination/shadow normalization as a baseline enhancement
+            val normalized = removeShadowsAndGradients(cropped)
+            if (normalized != cropped) {
+                cropped.recycle()
+            }
+            normalized
         } catch (e: Exception) {
             e.printStackTrace()
             null
@@ -33,9 +41,9 @@ object ImagePreprocessor {
         val canvas = Canvas(enhanced)
         val paint = Paint()
 
-        // Boost contrast by 1.45x and brightness by +12
-        val contrast = 1.45f
-        val brightness = 12f
+        // Boost contrast by 1.5x and brightness by +15
+        val contrast = 1.50f
+        val brightness = 15f
         val cm = ColorMatrix(
             floatArrayOf(
                 contrast * 0.299f, contrast * 0.587f, contrast * 0.114f, 0f, brightness,
@@ -47,8 +55,10 @@ object ImagePreprocessor {
         paint.colorFilter = ColorMatrixColorFilter(cm)
         canvas.drawBitmap(baseBitmap, 0f, 0f, paint)
 
+        // Reduce high frequency noise first
+        val deNoised = removeNoise(enhanced)
         // Apply a sharpening convolution pass
-        return sharpenBitmap(enhanced)
+        return sharpenBitmap(deNoised)
     }
 
     /**
@@ -63,8 +73,7 @@ object ImagePreprocessor {
         val pixels = IntArray(width * height)
         baseBitmap.getPixels(pixels, 0, width, 0, 0, width, height)
 
-        // Calculate global or adaptive luminance thresholding
-        // Using a 16x16 grid for adaptive local thresholding to handle shadows/gradients perfectly.
+        // Calculate global or adaptive luminance thresholding using a 16x16 grid
         val gridSizeX = 16
         val gridSizeY = 16
         val blockW = max(1, width / gridSizeX)
@@ -266,7 +275,204 @@ object ImagePreprocessor {
     }
 
     /**
-     * Sharpening filter using convolution kernel:
+     * Automatically crops non-document areas or margins with low visual variance.
+     */
+    private fun autoCropAndCorrectPerspective(bitmap: Bitmap): Bitmap {
+        val width = bitmap.width
+        val height = bitmap.height
+        if (width <= 150 || height <= 150) return bitmap
+
+        var top = 0
+        var bottom = height - 1
+        var left = 0
+        var right = width - 1
+
+        val sampleHeight = (height * 0.10).toInt().coerceAtMost(150)
+        val sampleWidth = (width * 0.10).toInt().coerceAtMost(150)
+
+        val pixels = IntArray(width)
+
+        // Scan from top down
+        for (y in 0 until sampleHeight) {
+            bitmap.getPixels(pixels, 0, width, 0, y, width, 1)
+            if (hasSignificantContent(pixels)) {
+                top = y
+                break
+            }
+        }
+
+        // Scan from bottom up
+        for (y in (height - 1) downTo (height - sampleHeight)) {
+            bitmap.getPixels(pixels, 0, width, 0, y, width, 1)
+            if (hasSignificantContent(pixels)) {
+                bottom = y
+                break
+            }
+        }
+
+        // Scan from left to right
+        val verticalPixels = IntArray(height)
+        for (x in 0 until sampleWidth) {
+            bitmap.getPixels(verticalPixels, 0, 1, x, 0, 1, height)
+            if (hasSignificantContent(verticalPixels)) {
+                left = x
+                break
+            }
+        }
+
+        // Scan from right to left
+        for (x in (width - 1) downTo (width - sampleWidth)) {
+            bitmap.getPixels(verticalPixels, 0, 1, x, 0, 1, height)
+            if (hasSignificantContent(verticalPixels)) {
+                right = x
+                break
+            }
+        }
+
+        val cropW = right - left + 1
+        val cropH = bottom - top + 1
+        if (cropW >= 150 && cropH >= 150 && (cropW != width || cropH != height)) {
+            return try {
+                Bitmap.createBitmap(bitmap, left, top, cropW, cropH)
+            } catch (e: Exception) {
+                bitmap
+            }
+        }
+        return bitmap
+    }
+
+    private fun hasSignificantContent(pixels: IntArray): Boolean {
+        var minL = 255
+        var maxL = 0
+        for (p in pixels) {
+            val r = (p shr 16) and 0xff
+            val g = (p shr 8) and 0xff
+            val b = p and 0xff
+            val l = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
+            if (l < minL) minL = l
+            if (l > maxL) maxL = l
+        }
+        return (maxL - minL) > 45
+    }
+
+    /**
+     * Advanced Illumination and Shadow Normalization.
+     * Evaluates local paper background luminance over a 32x32 block grid and divides the original
+     * image values by the estimated light intensity map. Completely removes shadow gradients and noise.
+     */
+    fun removeShadowsAndGradients(baseBitmap: Bitmap): Bitmap {
+        val width = baseBitmap.width
+        val height = baseBitmap.height
+        val dest = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+
+        val pixels = IntArray(width * height)
+        baseBitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+        val gridW = 32
+        val gridH = 32
+        val blockW = maxOf(1, width / gridW)
+        val blockH = maxOf(1, height / gridH)
+        val bgGrid = IntArray(gridW * gridH)
+
+        for (gy in 0 until gridH) {
+            for (gx in 0 until gridW) {
+                val startX = gx * blockW
+                val startY = gy * blockH
+                val endX = minOf(width, startX + blockW)
+                val endY = minOf(height, startY + blockH)
+
+                var maxL = 0
+                for (y in startY until endY) {
+                    for (x in startX until endX) {
+                        val p = pixels[y * width + x]
+                        val r = (p shr 16) and 0xff
+                        val g = (p shr 8) and 0xff
+                        val b = p and 0xff
+                        val l = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
+                        if (l > maxL) maxL = l
+                    }
+                }
+                bgGrid[gy * gridW + gx] = if (maxL > 0) maxL else 255
+            }
+        }
+
+        for (y in 0 until height) {
+            val gy = (y / blockH).coerceAtMost(gridH - 1)
+            val nextGy = (gy + 1).coerceAtMost(gridH - 1)
+            val weightY = (y % blockH).toFloat() / blockH
+
+            for (x in 0 until width) {
+                val gx = (x / blockW).coerceAtMost(gridW - 1)
+                val nextGx = (gx + 1).coerceAtMost(gridW - 1)
+                val weightX = (x % blockW).toFloat() / blockW
+
+                val bg00 = bgGrid[gy * gridW + gx]
+                val bg10 = bgGrid[gy * gridW + nextGx]
+                val bg01 = bgGrid[nextGy * gridW + gx]
+                val bg11 = bgGrid[nextGy * gridW + nextGx]
+
+                val bgL = (bg00 * (1 - weightX) * (1 - weightY) +
+                          bg10 * weightX * (1 - weightY) +
+                          bg01 * (1 - weightX) * weightY +
+                          bg11 * weightX * weightY).toInt().coerceIn(1, 255)
+
+                val idx = y * width + x
+                val p = pixels[idx]
+                val r = (p shr 16) and 0xff
+                val g = (p shr 8) and 0xff
+                val b = p and 0xff
+
+                val cr = (r.toFloat() / bgL * 255).toInt().coerceIn(0, 255)
+                val cg = (g.toFloat() / bgL * 255).toInt().coerceIn(0, 255)
+                val cb = (b.toFloat() / bgL * 255).toInt().coerceIn(0, 255)
+
+                pixels[idx] = (0xff000000.toInt()) or (cr shl 16) or (cg shl 8) or cb
+            }
+        }
+
+        dest.setPixels(pixels, 0, width, 0, 0, width, height)
+        return dest
+    }
+
+    /**
+     * Noise Reduction using a 3x3 low-pass smoothing filter.
+     */
+    fun removeNoise(src: Bitmap): Bitmap {
+        val width = src.width
+        val height = src.height
+        val dest = Bitmap.createBitmap(width, height, src.config ?: Bitmap.Config.ARGB_8888)
+        val pixels = IntArray(width * height)
+        val outPixels = IntArray(width * height)
+        src.getPixels(pixels, 0, width, 0, 0, width, height)
+
+        for (y in 1 until height - 1) {
+            for (x in 1 until width - 1) {
+                var sumR = 0
+                var sumG = 0
+                var sumB = 0
+
+                for (ky in -1..1) {
+                    for (kx in -1..1) {
+                        val p = pixels[(y + ky) * width + (x + kx)]
+                        sumR += (p shr 16) and 0xff
+                        sumG += (p shr 8) and 0xff
+                        sumB += p and 0xff
+                    }
+                }
+
+                val avgR = sumR / 9
+                val avgG = sumG / 9
+                val avgB = sumB / 9
+
+                outPixels[y * width + x] = (0xff000000.toInt()) or (avgR shl 16) or (avgG shl 8) or avgB
+            }
+        }
+        dest.setPixels(outPixels, 0, width, 0, 0, width, height)
+        return dest
+    }
+
+    /**
+     * Sharpening filter using standard convolution kernel:
      * [ 0  -1   0 ]
      * [-1   5  -1 ]
      * [ 0  -1   0 ]
@@ -285,13 +491,11 @@ object ImagePreprocessor {
             for (x in 1 until width - 1) {
                 val idx = y * width + x
 
-                // Center
                 val c = pixels[idx]
                 val cr = (c shr 16) and 0xff
                 val cg = (c shr 8) and 0xff
                 val cb = c and 0xff
 
-                // Neighbors
                 val n1 = pixels[idx - width] // top
                 val n2 = pixels[idx - 1]     // left
                 val n3 = pixels[idx + 1]     // right
@@ -315,10 +519,7 @@ object ImagePreprocessor {
     }
 
     /**
-     * Softer sharpening convolution kernel:
-     * [ 0   -0.5  0  ]
-     * [-0.5   3  -0.5]
-     * [ 0   -0.5  0  ]
+     * Softer sharpening convolution kernel.
      */
     private fun softSharpenBitmap(src: Bitmap): Bitmap {
         val width = src.width
