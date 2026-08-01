@@ -41,10 +41,10 @@ jobs:
           echo "Detected Project Root: $PROJECT_ROOT"
 
           # Search for the application module inside the project root
-          # Look for build.gradle or build.gradle.kts that applies com.android.application
+          # Must be a subfolder of PROJECT_ROOT, not PROJECT_ROOT itself
           APP_MODULE=""
-          for file in $(find "$PROJECT_ROOT" -name "build.gradle" -o -name "build.gradle.kts"); do
-            if grep -q "com.android.application" "$file" 2>/dev/null; then
+          for file in $(find "$PROJECT_ROOT" -mindepth 2 -name "build.gradle" -o -name "build.gradle.kts"); do
+            if grep -qE "com\.android\.application|android\.application" "$file" 2>/dev/null; then
               # The directory containing this file is the application module
               APP_MODULE_DIR=$(dirname "$file")
               APP_MODULE=$(basename "$APP_MODULE_DIR")
@@ -94,7 +94,7 @@ jobs:
       - name: Build Debug APK
         run: |
           cd "${{ env.PROJECT_ROOT }}"
-          ./gradlew assembleDebug --stacktrace --no-daemon
+          ./gradlew :${{ env.APP_MODULE }}:assembleDebug --stacktrace --no-daemon
 
       - name: Locate and Verify Generated APK
         id: verify-apk
