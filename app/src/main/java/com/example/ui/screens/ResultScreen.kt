@@ -62,6 +62,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -442,177 +443,153 @@ fun EvaluatedLabTestCard(
     item: EvaluatedLabResult,
     onClick: () -> Unit
 ) {
+    val cleanedValue = remember(item) {
+        val valueToFormat = item.parsedValue
+        if (valueToFormat != null) {
+            val df = java.text.DecimalFormat("#.######", java.text.DecimalFormatSymbols(java.util.Locale.ROOT))
+            df.format(valueToFormat)
+        } else {
+            val regex = Regex("""\d+(?:\.\d+)?""")
+            val match = regex.find(item.rawValue)
+            if (match != null) {
+                val parsed = match.value.toDoubleOrNull()
+                if (parsed != null) {
+                    val df = java.text.DecimalFormat("#.######", java.text.DecimalFormatSymbols(java.util.Locale.ROOT))
+                    df.format(parsed)
+                } else {
+                    match.value
+                }
+            } else {
+                item.rawValue
+            }
+        }
+    }
+
     val visuals = when (item.status) {
         TestStatus.NORMAL -> StatusVisuals(
             Color(0xFF2E7D32),
             Color(0xFFE8F5E9),
             Icons.Default.CheckCircle,
-            "طبيعي 🟢"
+            "طبيعي"
         )
         TestStatus.HIGH -> StatusVisuals(
             Color(0xFFC62828),
             Color(0xFFFFEBEE),
             Icons.Default.ArrowUpward,
-            "مرتفع 🔴"
+            "مرتفع"
         )
         TestStatus.LOW -> StatusVisuals(
             Color(0xFFE65100),
             Color(0xFFFFF3E0),
             Icons.Default.ArrowDownward,
-            "منخفض 🟠"
+            "منخفض"
         )
     }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(3.dp, RoundedCornerShape(22.dp))
+            .height(280.dp)
+            .shadow(4.dp, RoundedCornerShape(20.dp))
             .clickable { onClick() }
             .testTag("lab_card_${item.abbreviation}"),
-        shape = RoundedCornerShape(22.dp),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White)
     ) {
         Column(
-            modifier = Modifier.padding(20.dp)
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // Header Row: Test Arabic Name, Abbreviation & Status Badge
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = item.arabicName,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = MedicalBlueContainer
-                        ) {
-                            Text(
-                                text = item.abbreviation,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MedicalBluePrimary
-                            )
-                        }
-                    }
-                }
+            // 1. Arabic laboratory name
+            Text(
+                text = item.arabicName,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 15.sp,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
 
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = visuals.bg
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = visuals.icon,
-                            contentDescription = null,
-                            tint = visuals.color,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = visuals.text,
-                            color = visuals.color,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
-                        )
-                    }
-                }
-            }
+            // 2. Abbreviation
+            Text(
+                text = item.abbreviation,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.ExtraBold,
+                color = MedicalBluePrimary,
+                fontSize = 18.sp,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis
+            )
 
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Value, Unit & Reference Range Box
+            // 3. Status
             Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant
+                shape = RoundedCornerShape(12.dp),
+                color = visuals.bg,
+                modifier = Modifier.height(32.dp)
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
-                    Column {
-                        Text(
-                            text = "النتيجة",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 12.sp
-                        )
-                        Text(
-                            text = "${item.rawValue} ${item.unit}",
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = visuals.color
-                        )
-                    }
-
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            text = "المعدل الطبيعي",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 12.sp
-                        )
-                        Text(
-                            text = item.formattedRefRange,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
+                    Icon(
+                        imageVector = visuals.icon,
+                        contentDescription = null,
+                        tint = visuals.color,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = visuals.text,
+                        color = visuals.color,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            // 4. Numeric value only
+            Text(
+                text = cleanedValue,
+                style = MaterialTheme.typography.displayMedium,
+                fontWeight = FontWeight.Black,
+                color = visuals.color,
+                fontSize = 32.sp,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            // 5. Interpretation button
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MedicalBlueContainer,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .clickable { onClick() }
             ) {
-                if (item.isLowConfidence) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Warning,
-                            contentDescription = "تنبيه",
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "راجع التقرير الأصلي للتأكد",
-                            color = MaterialTheme.colorScheme.error,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                } else {
-                    Spacer(modifier = Modifier.width(1.dp))
-                }
-
                 Row(
+                    modifier = Modifier.fillMaxSize(),
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable { onClick() }
+                    horizontalArrangement = Arrangement.Center
                 ) {
                     Text(
-                        text = "اضغط لعرض التفسير الطبي الشامل",
-                        fontSize = 12.sp,
+                        text = "عرض التفسير الطبي",
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = MedicalBluePrimary
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                         contentDescription = "التفاصيل",
