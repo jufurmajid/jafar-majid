@@ -29,16 +29,12 @@ class AdManagerTest {
     }
 
     @Test
-    fun testBuildConfigDebugAdUnitId() {
-        // In the test/debug build environment, BuildConfig.DEBUG is true.
-        // Let's use reflection to fetch the private property 'adUnitId' from AdManager object to test its behavior.
+    fun testProductionAdUnitIdUsedAlways() {
+        // Use reflection to fetch the private property 'adUnitId' from AdManager object to test its behavior.
         val privateProp = AdManager::class.java.getDeclaredMethod("getAdUnitId")
         privateProp.isAccessible = true
         val value = privateProp.invoke(AdManager) as String
-        if (BuildConfig.DEBUG) {
-            assertEquals("ca-app-pub-3940256099942544/1033173712", value)
-        } else {
-            assertEquals("ca-app-pub-4391223105178139/4231762738", value)
-        }
+        // Must always return the production interstitial ad unit ID
+        assertEquals("ca-app-pub-4391223105178139/4231762738", value)
     }
 }
