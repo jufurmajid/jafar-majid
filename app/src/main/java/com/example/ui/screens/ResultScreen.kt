@@ -96,18 +96,17 @@ fun ResultScreen(
     val repository = remember { ReportRepository(context) }
     val activity = remember(context) { context as? Activity }
 
-    val handleNavigationWithAd = { navigateAction: () -> Unit ->
+    // After the user reaches the results screen, show the interstitial ad if triggered
+    LaunchedEffect(Unit) {
         if (activity != null && AdManager.shouldShowAd()) {
             AdManager.showAdIfReady(activity) {
-                navigateAction()
+                // Done displaying the ad
             }
-        } else {
-            navigateAction()
         }
     }
 
     BackHandler {
-        handleNavigationWithAd(onBackClick)
+        onBackClick()
     }
 
     val evaluatedResults = remember(ocrResult, age, gender) {
@@ -155,7 +154,7 @@ fun ResultScreen(
                 },
                 navigationIcon = {
                     IconButton(
-                        onClick = { handleNavigationWithAd(onBackClick) },
+                        onClick = onBackClick,
                         modifier = Modifier.testTag("back_button")
                     ) {
                         Icon(
@@ -383,7 +382,7 @@ fun ResultScreen(
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             OutlinedButton(
-                                onClick = { handleNavigationWithAd(onHomeClick) },
+                                onClick = onHomeClick,
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(56.dp)
@@ -403,7 +402,7 @@ fun ResultScreen(
                             }
 
                             Button(
-                                onClick = { handleNavigationWithAd(onBackClick) },
+                                onClick = onBackClick,
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(56.dp)
@@ -435,8 +434,8 @@ fun ResultScreen(
                 ErrorResultView(
                     message = ocrResult.message,
                     imageUri = imageUri,
-                    onBackClick = { handleNavigationWithAd(onBackClick) },
-                    onHomeClick = { handleNavigationWithAd(onHomeClick) },
+                    onBackClick = onBackClick,
+                    onHomeClick = onHomeClick,
                     onViewImageClick = onViewImageClick,
                     modifier = Modifier.padding(innerPadding)
                 )
@@ -446,8 +445,8 @@ fun ResultScreen(
                 ErrorResultView(
                     message = ocrResult.message,
                     imageUri = imageUri,
-                    onBackClick = { handleNavigationWithAd(onBackClick) },
-                    onHomeClick = { handleNavigationWithAd(onHomeClick) },
+                    onBackClick = onBackClick,
+                    onHomeClick = onHomeClick,
                     onViewImageClick = onViewImageClick,
                     modifier = Modifier.padding(innerPadding)
                 )

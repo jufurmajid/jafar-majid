@@ -3,7 +3,6 @@ package com.example.util
 import android.app.Activity
 import android.content.Context
 import android.util.Log
-import com.example.BuildConfig
 import com.google.android.gms.ads.AdError
 import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.FullScreenContentCallback
@@ -17,27 +16,26 @@ object AdManager {
 
     // Real AdMob Interstitial Ad Unit ID for production releases
     private const val PROD_INTERSTITIAL_AD_UNIT_ID = "ca-app-pub-4391223105178139/4231762738"
-    // Google's official Interstitial TEST Ad Unit ID for debugging/testing
-    private const val TEST_INTERSTITIAL_AD_UNIT_ID = "ca-app-pub-3940256099942544/1033173712"
 
     private var mInterstitialAd: InterstitialAd? = null
     private var isLoading = false
     private var isInitialized = false
 
+    private const val INITIAL_RETRY_DELAY_MS = 2000L
+    private const val MAX_RETRY_DELAY_MS = 64000L
+    private var retryDelayMs = INITIAL_RETRY_DELAY_MS
+
+    private var lastShowedAnalysisCount = -1
+
     var analysisCount = 0
         private set
 
     /**
-     * Gets the appropriate Ad Unit ID based on build type.
+     * Gets the appropriate Ad Unit ID.
+     * Requirement: Remove all Google test ad unit IDs. Use ONLY the production AdMob IDs above.
      */
     private val adUnitId: String
-        get() = if (BuildConfig.DEBUG) {
-            Log.d(TAG, "Build is in DEBUG mode. Using Google official test ad unit ID: $TEST_INTERSTITIAL_AD_UNIT_ID")
-            TEST_INTERSTITIAL_AD_UNIT_ID
-        } else {
-            Log.d(TAG, "Build is in RELEASE mode. Using production ad unit ID: $PROD_INTERSTITIAL_AD_UNIT_ID")
-            PROD_INTERSTITIAL_AD_UNIT_ID
-        }
+        get() = PROD_INTERSTITIAL_AD_UNIT_ID
 
     /**
      * Initializes the Mobile Ads SDK and preloads the first ad.
@@ -50,8 +48,9 @@ object AdManager {
         }
         val appContext = context.applicationContext
         Log.i(TAG, "Initializing Mobile Ads SDK...")
+        // Mark as initialized immediately to avoid duplicate concurrent initialization calls
+        isInitialized = true
         MobileAds.initialize(appContext) { initializationStatus ->
-            isInitialized = true
             val statusMap = initializationStatus.adapterStatusMap
             for ((adapterClass, status) in statusMap) {
                 Log.d(TAG, "Adapter Name: $adapterClass, State: ${status.initializationState}, Description: ${status.description}")
@@ -90,6 +89,7 @@ object AdManager {
                 override fun onAdLoaded(interstitialAd: InterstitialAd) {
                     mInterstitialAd = interstitialAd
                     isLoading = false
+                    retryDelayMs = INITIAL_RETRY_DELAY_MS // Reset retry delay on successful load
                     Log.i(TAG, "Interstitial ad loaded successfully.")
                 }
 
@@ -100,6 +100,13 @@ object AdManager {
                         TAG,
                         "Failed to load interstitial ad: Code=${loadAdError.code}, Message=${loadAdError.message}, Domain=${loadAdError.domain}"
                     )
+                    // Automatically retry using Google's recommended approach: exponential backoff
+                    val currentDelay = retryDelayMs
+                    retryDelayMs = (retryDelayMs * 2).coerceAtMost(MAX_RETRY_DELAY_MS)
+                    Log.i(TAG, "Retrying ad load in ${currentDelay}ms (exponential backoff)...")
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        loadAd(appContext)
+                    }, currentDelay)
                 }
             }
         )
@@ -118,8 +125,9 @@ object AdManager {
      * Show ad ONLY after every second completed laboratory analysis (2, 4, 6, 8, ...).
      */
     fun shouldShowAd(): Boolean {
-        val result = analysisCount > 0 && analysisCount % 2 == 0
-        Log.d(TAG, "shouldShowAd: $result (count: $analysisCount)")
+        val isTargetCount = analysisCount > 0 && analysisCount % 2 == 0
+        val result = isTargetCount && analysisCount != lastShowedAnalysisCount
+        Log.d(TAG, "shouldShowAd: $result (count: $analysisCount, lastShowed: $lastShowedAnalysisCount)")
         return result
     }
 
@@ -129,6 +137,9 @@ object AdManager {
      */
     fun showAdIfReady(activity: Activity, onAdClosed: () -> Unit) {
         val ad = mInterstitialAd
+        // Mark that we are showing/attempting to show the ad for this analysis count, so we don't trigger again on recomposition
+        lastShowedAnalysisCount = analysisCount
+
         if (ad != null) {
             Log.i(TAG, "Interstitial ad is ready. Attempting to show...")
             ad.fullScreenContentCallback = object : FullScreenContentCallback() {
