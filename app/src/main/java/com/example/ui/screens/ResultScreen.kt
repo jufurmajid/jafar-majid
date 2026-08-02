@@ -1,6 +1,9 @@
 package com.example.ui.screens
 
+import android.app.Activity
 import android.net.Uri
+import androidx.activity.compose.BackHandler
+import com.example.util.AdManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -91,6 +94,21 @@ fun ResultScreen(
 ) {
     val context = LocalContext.current
     val repository = remember { ReportRepository(context) }
+    val activity = remember(context) { context as? Activity }
+
+    val handleNavigationWithAd = { navigateAction: () -> Unit ->
+        if (activity != null && AdManager.shouldShowAd()) {
+            AdManager.showAdIfReady(activity) {
+                navigateAction()
+            }
+        } else {
+            navigateAction()
+        }
+    }
+
+    BackHandler {
+        handleNavigationWithAd(onBackClick)
+    }
 
     val evaluatedResults = remember(ocrResult, age, gender) {
         if (ocrResult is OcrAnalysisResult.Success) {
@@ -137,7 +155,7 @@ fun ResultScreen(
                 },
                 navigationIcon = {
                     IconButton(
-                        onClick = onBackClick,
+                        onClick = { handleNavigationWithAd(onBackClick) },
                         modifier = Modifier.testTag("back_button")
                     ) {
                         Icon(
@@ -365,7 +383,7 @@ fun ResultScreen(
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             OutlinedButton(
-                                onClick = onHomeClick,
+                                onClick = { handleNavigationWithAd(onHomeClick) },
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(56.dp)
@@ -385,7 +403,7 @@ fun ResultScreen(
                             }
 
                             Button(
-                                onClick = onBackClick,
+                                onClick = { handleNavigationWithAd(onBackClick) },
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(56.dp)
@@ -417,8 +435,8 @@ fun ResultScreen(
                 ErrorResultView(
                     message = ocrResult.message,
                     imageUri = imageUri,
-                    onBackClick = onBackClick,
-                    onHomeClick = onHomeClick,
+                    onBackClick = { handleNavigationWithAd(onBackClick) },
+                    onHomeClick = { handleNavigationWithAd(onHomeClick) },
                     onViewImageClick = onViewImageClick,
                     modifier = Modifier.padding(innerPadding)
                 )
@@ -428,8 +446,8 @@ fun ResultScreen(
                 ErrorResultView(
                     message = ocrResult.message,
                     imageUri = imageUri,
-                    onBackClick = onBackClick,
-                    onHomeClick = onHomeClick,
+                    onBackClick = { handleNavigationWithAd(onBackClick) },
+                    onHomeClick = { handleNavigationWithAd(onHomeClick) },
                     onViewImageClick = onViewImageClick,
                     modifier = Modifier.padding(innerPadding)
                 )
