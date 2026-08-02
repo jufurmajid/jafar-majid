@@ -5,6 +5,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import com.example.util.AdManager
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -39,6 +40,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        AdManager.initialize(applicationContext)
         setContent {
             MedicalTranslatorApp()
         }
@@ -139,6 +141,9 @@ fun MedicalTranslatorApp() {
                         navController.navigate("image_viewer/$encodedUri")
                     },
                     onAnalysisFinished = { result ->
+                        if (result is OcrAnalysisResult.Success) {
+                            AdManager.incrementAnalysisCount()
+                        }
                         currentOcrResult = result
                         val encodedImageUri = Uri.encode(imageUri.toString())
                         navController.navigate("result/$encodedImageUri/$age/${gender.name}") {
