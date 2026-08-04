@@ -14,8 +14,8 @@ import com.google.android.gms.ads.interstitial.InterstitialAdLoadCallback
 object AdManager {
     private const val TAG = "AdManager"
 
-    // Real AdMob Interstitial Ad Unit ID for production releases
-    private const val PROD_INTERSTITIAL_AD_UNIT_ID = "ca-app-pub-4391223105178139/4231762738"
+    // Official Google Test Interstitial Ad Unit ID
+    private const val TEST_INTERSTITIAL_AD_UNIT_ID = "ca-app-pub-3940256099942544/1033173712"
 
     private var mInterstitialAd: InterstitialAd? = null
     private var isLoading = false
@@ -32,15 +32,16 @@ object AdManager {
 
     /**
      * Gets the appropriate Ad Unit ID.
-     * Requirement: Remove all Google test ad unit IDs. Use ONLY the production AdMob IDs above.
+     * Uses the official Google test ad unit ID.
      */
     private val adUnitId: String
-        get() = PROD_INTERSTITIAL_AD_UNIT_ID
+        get() = TEST_INTERSTITIAL_AD_UNIT_ID
 
     /**
      * Initializes the Mobile Ads SDK and preloads the first ad.
      * Uses application context to prevent memory leaks.
      */
+    @Synchronized
     fun initialize(context: Context) {
         if (isInitialized) {
             Log.d(TAG, "Mobile Ads SDK is already initialized.")
@@ -90,7 +91,11 @@ object AdManager {
                     mInterstitialAd = interstitialAd
                     isLoading = false
                     retryDelayMs = INITIAL_RETRY_DELAY_MS // Reset retry delay on successful load
-                    Log.i(TAG, "Interstitial ad loaded successfully.")
+                    Log.i(
+                        TAG,
+                        "Interstitial ad loaded successfully.\n" +
+                        " - Response Info: ${interstitialAd.responseInfo}"
+                    )
                 }
 
                 override fun onAdFailedToLoad(loadAdError: LoadAdError) {
@@ -98,7 +103,10 @@ object AdManager {
                     isLoading = false
                     Log.e(
                         TAG,
-                        "Failed to load interstitial ad: Code=${loadAdError.code}, Message=${loadAdError.message}, Domain=${loadAdError.domain}"
+                        "Failed to load interstitial ad:\n" +
+                        " - Error Code: ${loadAdError.code}\n" +
+                        " - Error Message: ${loadAdError.message}\n" +
+                        " - Response Info: ${loadAdError.responseInfo}"
                     )
                     // Automatically retry using Google's recommended approach: exponential backoff
                     val currentDelay = retryDelayMs
@@ -155,7 +163,9 @@ object AdManager {
                 override fun onAdFailedToShowFullScreenContent(adError: AdError) {
                     Log.e(
                         TAG,
-                        "Interstitial ad failed to show: Code=${adError.code}, Message=${adError.message}, Domain=${adError.domain}"
+                        "Interstitial ad failed to show:\n" +
+                        " - Error Code: ${adError.code}\n" +
+                        " - Error Message: ${adError.message}"
                     )
                     mInterstitialAd = null
                     onAdClosed()
