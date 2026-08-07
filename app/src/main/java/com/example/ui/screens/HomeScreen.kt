@@ -186,7 +186,7 @@ fun HomeScreen(
 
             // Title
             Text(
-                text = "ترجمان التحاليل الطبية",
+                text = "مترجم التحاليل الطبية",
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
