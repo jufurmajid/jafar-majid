@@ -25,14 +25,14 @@ android {
 
   signingConfigs {
     create("release") {
-      val keystorePath = "${rootDir}/my-release-key.jks"
+      val keystorePath = "${rootDir}/release-key.jks"
       storeFile = file(keystorePath)
 
       val keystorePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
       val keyPasswordEnv = System.getenv("KEY_PASSWORD")
 
       storePassword = keystorePassword
-      keyAlias = "mykey"
+      keyAlias = System.getenv("KEY_ALIAS") ?: "releasekey"
       keyPassword = if (!keyPasswordEnv.isNullOrEmpty()) keyPasswordEnv else keystorePassword
     }
     create("debugConfig") {
