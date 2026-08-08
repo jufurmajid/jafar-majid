@@ -17,6 +17,9 @@ object AdManager {
     // Official Google Test Interstitial Ad Unit ID
     private const val TEST_INTERSTITIAL_AD_UNIT_ID = "ca-app-pub-3940256099942544/1033173712"
 
+    // Production Interstitial Ad Unit ID
+    private const val PRODUCTION_INTERSTITIAL_AD_UNIT_ID = "ca-app-pub-4391223105178139/4231762738"
+
     private var mInterstitialAd: InterstitialAd? = null
     private var isLoading = false
     private var isInitialized = false
@@ -25,17 +28,17 @@ object AdManager {
     private const val MAX_RETRY_DELAY_MS = 64000L
     private var retryDelayMs = INITIAL_RETRY_DELAY_MS
 
-    private var lastShowedAnalysisCount = -1
+    private var lastAttemptedAnalysisCount = -1
 
     var analysisCount = 0
         private set
 
     /**
      * Gets the appropriate Ad Unit ID.
-     * Uses the official Google test ad unit ID.
+     * Uses the production ad unit ID.
      */
     private val adUnitId: String
-        get() = TEST_INTERSTITIAL_AD_UNIT_ID
+        get() = PRODUCTION_INTERSTITIAL_AD_UNIT_ID
 
     /**
      * Initializes the Mobile Ads SDK and preloads the first ad.
@@ -130,12 +133,11 @@ object AdManager {
 
     /**
      * Checks if we should show the ad based on the completed analysis count.
-     * Show ad ONLY after every second completed laboratory analysis (2, 4, 6, 8, ...).
+     * Show ad after EVERY completed laboratory analysis.
      */
     fun shouldShowAd(): Boolean {
-        val isTargetCount = analysisCount > 0 && analysisCount % 2 == 0
-        val result = isTargetCount && analysisCount != lastShowedAnalysisCount
-        Log.d(TAG, "shouldShowAd: $result (count: $analysisCount, lastShowed: $lastShowedAnalysisCount)")
+        val result = analysisCount > 0 && analysisCount > lastAttemptedAnalysisCount
+        Log.d(TAG, "shouldShowAd: $result (count: $analysisCount, lastAttempted: $lastAttemptedAnalysisCount)")
         return result
     }
 
@@ -146,7 +148,7 @@ object AdManager {
     fun showAdIfReady(activity: Activity, onAdClosed: () -> Unit) {
         val ad = mInterstitialAd
         // Mark that we are showing/attempting to show the ad for this analysis count, so we don't trigger again on recomposition
-        lastShowedAnalysisCount = analysisCount
+        lastAttemptedAnalysisCount = analysisCount
 
         if (ad != null) {
             Log.i(TAG, "Interstitial ad is ready. Attempting to show...")

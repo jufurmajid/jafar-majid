@@ -141,9 +141,7 @@ fun MedicalTranslatorApp() {
                         navController.navigate("image_viewer/$encodedUri")
                     },
                     onAnalysisFinished = { result ->
-                        if (result is OcrAnalysisResult.Success) {
-                            AdManager.incrementAnalysisCount()
-                        }
+                        AdManager.incrementAnalysisCount()
                         currentOcrResult = result
                         val encodedImageUri = Uri.encode(imageUri.toString())
                         navController.navigate("result/$encodedImageUri/$age/${gender.name}") {

@@ -13,18 +13,19 @@ class AdManagerTest {
 
     @Test
     fun testInitialState() {
-        // Verify analysis count and shouldShowAd logic
+        val activity = org.robolectric.Robolectric.buildActivity(android.app.Activity::class.java).setup().get()
         val current = AdManager.analysisCount
         var count = current
-        for (i in 1..10) {
+        for (i in 1..5) {
             AdManager.incrementAnalysisCount()
             count++
             assertEquals(count, AdManager.analysisCount)
-            if (count > 0 && count % 2 == 0) {
-                assertTrue("Count $count should trigger ad show", AdManager.shouldShowAd())
-            } else {
-                assertFalse("Count $count should NOT trigger ad show", AdManager.shouldShowAd())
-            }
+            // It should want to show an ad now
+            assertTrue("Count $count should trigger ad show", AdManager.shouldShowAd())
+            // Simulate showing the ad
+            AdManager.showAdIfReady(activity) { }
+            // Now shouldShowAd should be false for the same count
+            assertFalse("Count $count should NOT trigger ad show again", AdManager.shouldShowAd())
         }
     }
 
@@ -34,7 +35,7 @@ class AdManagerTest {
         val privateProp = AdManager::class.java.getDeclaredMethod("getAdUnitId")
         privateProp.isAccessible = true
         val value = privateProp.invoke(AdManager) as String
-        // Must always return the official Google test interstitial ad unit ID
-        assertEquals("ca-app-pub-3940256099942544/1033173712", value)
+        // Must always return the specified production interstitial ad unit ID
+        assertEquals("ca-app-pub-4391223105178139/4231762738", value)
     }
 }
