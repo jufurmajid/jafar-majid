@@ -17,23 +17,23 @@ android {
     applicationId = "com.aistudio.medicaltesttranslator.trjman"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 2
+    versionName = "1.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
   signingConfigs {
     create("release") {
-      val keystorePath = "${rootDir}/release-key.jks"
+      val keystorePath = "${rootDir}/my-upload-key.jks"
       storeFile = file(keystorePath)
 
-      val keystorePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
-      val keyPasswordEnv = System.getenv("KEY_PASSWORD")
+      val keystorePassword = System.getenv("KEYSTORE_PASSWORD")?.takeIf { it.isNotEmpty() } ?: "android"
+      val keyPasswordEnv = System.getenv("KEY_PASSWORD")?.takeIf { it.isNotEmpty() }
 
       storePassword = keystorePassword
-      keyAlias = System.getenv("KEY_ALIAS") ?: "releasekey"
-      keyPassword = if (!keyPasswordEnv.isNullOrEmpty()) keyPasswordEnv else keystorePassword
+      keyAlias = System.getenv("KEY_ALIAS")?.takeIf { it.isNotEmpty() } ?: "upload"
+      keyPassword = keyPasswordEnv ?: keystorePassword
     }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
@@ -48,8 +48,7 @@ android {
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      val hasReleaseSecrets = !System.getenv("KEYSTORE_PASSWORD").isNullOrEmpty()
-      signingConfig = if (hasReleaseSecrets) signingConfigs.getByName("release") else signingConfigs.getByName("debugConfig")
+      signingConfig = signingConfigs.getByName("release")
     }
     debug { signingConfig = signingConfigs.getByName("debugConfig") }
   }
