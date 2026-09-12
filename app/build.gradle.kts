@@ -45,10 +45,14 @@ android {
 
   buildTypes {
     release {
+      isMinifyEnabled = true
+      isShrinkResources = true
       isCrunchPngs = false
-      isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
+      ndk {
+        debugSymbolLevel = "FULL"
+      }
     }
     debug { signingConfig = signingConfigs.getByName("debugConfig") }
   }
@@ -60,7 +64,14 @@ android {
     compose = true
     buildConfig = true
   }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
+      all { test ->
+        test.systemProperty("robolectric.dependency.repo.url", "https://maven-central.storage-download.googleapis.com/maven2/")
+      }
+    }
+  }
 }
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files

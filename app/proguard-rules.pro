@@ -26,3 +26,24 @@
 -keep class com.google.ads.** { *; }
 -dontwarn com.google.android.gms.ads.**
 -dontwarn com.google.ads.**
+
+# Keep app data models, Room entities, and DAO classes
+-keep class com.example.data.** { *; }
+-keep class com.example.ocr.** { *; }
+-keep class com.example.util.** { *; }
+
+# Keep Room generated classes and database
+-keep class * extends androidx.room.RoomDatabase
+-dontwarn androidx.room.**
+
+# Keep Moshi models and annotations
+-keep @com.squareup.moshi.JsonClass class * { *; }
+-keepclassmembers class * {
+    @com.squareup.moshi.Json *;
+}
+
+# Preserve ML Kit
+-dontwarn com.google.mlkit.**
+
+# Keep line numbers for stack traces in release crash reports
+-keepattributes SourceFile,LineNumberTable
